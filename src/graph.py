@@ -1,5 +1,14 @@
 from dataclasses import dataclass
 from typing import Optional
+from enum import Enum
+
+class   ZoneType(Enum):
+    NORMAL = "normal"
+    BLOCKED = "blocked"
+    RESTRICTED = "restricted"
+    PRIORITY = "priority"
+
+
 
 @dataclass
 class   Connection:
