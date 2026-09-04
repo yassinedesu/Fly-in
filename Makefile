@@ -1,16 +1,18 @@
-SRC= src
+MAIN = src/main.py
+MAP ?= maps/easy/01_linear_path.txt
 
 install:
 	python3 -m venv .venv
 	./.venv/bin/python3 -m pip install -r requirements.txt
+
 run:
-	./.venv/bin/python3 -m $(SRC) $(MAP)
+	./.venv/bin/python3 $(MAIN) $(MAP)
 
 debug:
-	./.venv/bin/python3 -m pdb -m $(SRC) $(MAP)
+	./.venv/bin/python3 -m pdb $(MAIN) $(MAP)
 
 clean:
-	find . -type d -name __pycache__ -exec rm -rf {} +
+	find . -type d -name "__pycache__" -exec rm -rf {} +
 	rm -rf .mypy_cache
 
 lint:
