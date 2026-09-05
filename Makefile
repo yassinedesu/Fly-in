@@ -1,5 +1,5 @@
 MAIN = src/main.py
-MAP ?= maps/easy/01_linear_path.txt
+MAP ?= $(if $(ARGS),$(ARGS),maps/easy/01_linear_path.txt)
 
 install:
 	python3 -m venv .venv
