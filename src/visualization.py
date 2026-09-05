@@ -4,6 +4,7 @@ from __future__ import annotations
 import colorsys
 import math
 import arcade
+import arcade.types
 from graph import Graph, Hub, ZoneType
 
 WINDOW_WIDTH: int = 1024
@@ -18,18 +19,18 @@ MIN_ZOOM: float = 0.05
 MAX_ZOOM: float = 8.0
 ZOOM_STEP: float = 1.12
 
-BACKGROUND_COLOR = arcade.color.EERIE_BLACK
-LINE_COLOR = arcade.color.DARK_GRAY
-TEXT_COLOR = arcade.color.WHITE
+BACKGROUND_COLOR: arcade.types.Color = arcade.color.EERIE_BLACK
+LINE_COLOR: arcade.types.Color = arcade.color.DARK_GRAY
+TEXT_COLOR: arcade.types.Color = arcade.color.WHITE
 
-ZONE_TYPE_COLORS: dict[ZoneType, tuple[int, int, int]] = {
+ZONE_TYPE_COLORS: dict[ZoneType, arcade.types.Color] = {
     ZoneType.NORMAL: arcade.color.LIGHT_GRAY,
     ZoneType.BLOCKED: arcade.color.DIM_GRAY,
     ZoneType.RESTRICTED: arcade.color.RED,
     ZoneType.PRIORITY: arcade.color.GREEN,
 }
 
-DRONE_COLORS: list[tuple[int, int, int]] = [
+DRONE_COLORS: list[arcade.types.Color] = [
     arcade.color.YELLOW,
     arcade.color.CYAN,
     arcade.color.ORANGE,
@@ -41,36 +42,35 @@ DRONE_COLORS: list[tuple[int, int, int]] = [
 ]
 
 
-def get_rainbow_color(progress: float) -> tuple[int, int, int]:
+def get_rainbow_color(progress: float) -> arcade.types.Color:
     """Generates a dynamic RGB cycling hue for rainbow metadata tags."""
     r, g, b = colorsys.hsv_to_rgb((progress * 0.25) % 1.0, 0.85, 0.95)
-    return int(r * 255), int(g * 255), int(b * 255)
+    return arcade.types.Color(
+        int(r * 255), int(g * 255), int(b * 255), 255
+    )
 
 
 def resolve_hub_color(
     hub: Hub, graph: Graph, anim_time: float = 0.0
-) -> tuple[int, int, int]:
+) -> arcade.types.Color:
     """Determines the color of a hub prioritizing metadata over defaults."""
     if hub.color:
         cleaned = hub.color.strip().upper()
         if cleaned == "RAINBOW":
             return get_rainbow_color(anim_time)
 
-        # 1. Direct attribute match in arcade.color
         if hasattr(arcade.color, cleaned):
             val = getattr(arcade.color, cleaned)
-            if isinstance(val, tuple) and len(val) >= 3:
-                return val[:3]
+            if isinstance(val, arcade.types.Color):
+                return val
 
-        # 2. Check underscore normalized names
         normalized = cleaned.replace("-", "_").replace(" ", "_")
         if hasattr(arcade.color, normalized):
             val = getattr(arcade.color, normalized)
-            if isinstance(val, tuple) and len(val) >= 3:
-                return val[:3]
+            if isinstance(val, arcade.types.Color):
+                return val
 
-        # 3. Known extended map aliases
-        aliases: dict[str, tuple[int, int, int]] = {
+        aliases: dict[str, arcade.types.Color] = {
             "DARKRED": arcade.color.DARK_RED,
             "MAROON": arcade.color.MAROON,
             "CRIMSON": arcade.color.CRIMSON,
@@ -92,7 +92,6 @@ def resolve_hub_color(
         if normalized in aliases:
             return aliases[normalized]
 
-    # Fallback to defaults if no custom color was specified
     if hub.is_start:
         return arcade.color.GREEN
     if hub.is_end:
@@ -102,7 +101,9 @@ def resolve_hub_color(
 
 
 def point_line_distance(
-    p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]
+    p: tuple[float, float],
+    a: tuple[float, float],
+    b: tuple[float, float],
 ) -> float:
     """Calculates point-to-segment distance via vector dot product."""
     px, py = p
@@ -114,7 +115,6 @@ def point_line_distance(
     if length_sq == 0.0:
         return math.hypot(px - ax, py - ay)
 
-    # Algebraic dot product: (P - A) . (B - A) / |B - A|^2
     wx, wy = px - ax, py - ay
     t = max(0.0, min(1.0, (wx * vx + wy * vy) / length_sq))
     proj_x = ax + t * vx
@@ -131,8 +131,12 @@ class FlyInVisualizer(arcade.Window):
         simulation_data: list[dict[str, str]] | None = None,
         map_name: str = "",
     ) -> None:
-        title = f"{WINDOW_TITLE} - {map_name}" if map_name else WINDOW_TITLE
-        super().__init__(WINDOW_WIDTH, WINDOW_HEIGHT, title, fullscreen=False)
+        title = (
+            f"{WINDOW_TITLE} - {map_name}" if map_name else WINDOW_TITLE
+        )
+        super().__init__(
+            WINDOW_WIDTH, WINDOW_HEIGHT, title, fullscreen=False
+        )
         self.graph = graph
         self.background_color = BACKGROUND_COLOR
 
@@ -145,19 +149,19 @@ class FlyInVisualizer(arcade.Window):
         self.mouse_x: float = 0.0
         self.mouse_y: float = 0.0
 
-        # World positions
         self.positions: dict[str, tuple[float, float]] = {
-            hub.name: (float(hub.x * WORLD_SCALE), float(hub.y * WORLD_SCALE))
+            hub.name: (
+                float(hub.x * WORLD_SCALE),
+                float(hub.y * WORLD_SCALE),
+            )
             for hub in self.graph.hubs.values()
         }
 
-        # Drone color mapping
-        self.drone_colors: dict[str, tuple[int, int, int]] = {
+        self.drone_colors: dict[str, arcade.types.Color] = {
             f"D{i + 1}": DRONE_COLORS[i % len(DRONE_COLORS)]
             for i in range(self.graph.drone_count)
         }
 
-        # Precompute per-turn drone coordinates
         end_name = self.graph.end_hub.name if self.graph.end_hub else ""
         self.drone_paths: dict[str, list[tuple[float, float]]] = {
             d_id: [] for d_id in self.drone_colors
@@ -182,7 +186,6 @@ class FlyInVisualizer(arcade.Window):
                         self.positions.get(loc, (0.0, 0.0))
                     )
 
-        # Precompute occupancy lookup per turn
         self.occupancy_history: list[dict[str, int]] = []
         for t in range(self.max_turns + 1):
             state = (
@@ -195,7 +198,6 @@ class FlyInVisualizer(arcade.Window):
                 occ[loc] = occ.get(loc, 0) + 1
             self.occupancy_history.append(occ)
 
-        # Dual cameras
         self.world_camera = arcade.Camera2D()
         self.gui_camera = arcade.Camera2D()
 
@@ -240,8 +242,9 @@ class FlyInVisualizer(arcade.Window):
         # 1. World Camera
         self.world_camera.use()
 
-        # Check hovered connection
-        world_mouse = self.world_camera.unproject((self.mouse_x, self.mouse_y))
+        world_mouse = self.world_camera.unproject(
+            (self.mouse_x, self.mouse_y)
+        )
         wx, wy = world_mouse.x, world_mouse.y
 
         hovered_edge: frozenset[str] | None = None
@@ -291,7 +294,9 @@ class FlyInVisualizer(arcade.Window):
         # Draw Drones with Linear Interpolation (Lerp)
         t0 = int(self.current_turn)
         t1 = min(t0 + 1, self.max_turns)
-        progress = self.current_turn % 1.0 if t0 < self.max_turns else 0.0
+        progress = (
+            self.current_turn % 1.0 if t0 < self.max_turns else 0.0
+        )
 
         for d_id, path in self.drone_paths.items():
             if t0 >= len(path):
@@ -444,6 +449,7 @@ class FlyInVisualizer(arcade.Window):
             box.draw()
 
     def on_mouse_motion(self, x: int, y: int, dx: int, dy: int) -> None:
+        """Saves current screen cursor coordinates."""
         self.mouse_x = float(x)
         self.mouse_y = float(y)
 

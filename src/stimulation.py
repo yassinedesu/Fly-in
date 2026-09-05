@@ -1,33 +1,30 @@
+"""Simulation engine managing drone movements and zone capacity rules."""
+
 from __future__ import annotations
 from graph import Graph
 
 
 class Simulator:
+    """Executes and records turn-by-turn fleet movements."""
+
     def __init__(
         self,
         graph: Graph,
-        routes: dict[str, list[str]] | list[str],
+        drone_routes: dict[str, list[str]],
         capacity_info: bool = False,
     ) -> None:
         self.graph = graph
+        self.drone_routes = drone_routes
         self.capacity_info = capacity_info
-
-        if isinstance(routes, dict):
-            self.drone_routes = routes
-        else:
-            self.drone_routes = {
-                f"D{i + 1}": list(routes)
-                for i in range(self.graph.drone_count)
-            }
-
         self.max_turns = (
-            max(len(r) - 1 for r in self.drone_routes.values())
-            if self.drone_routes
+            max(len(route) - 1 for route in drone_routes.values())
+            if drone_routes
             else 0
         )
         self.history: list[dict[str, str]] = []
 
     def run_simulation(self) -> list[dict[str, str]]:
+        """Runs the multi-drone simulation and outputs turn movements."""
         assert self.graph.start_hub is not None
         assert self.graph.end_hub is not None
         start_name = self.graph.start_hub.name
@@ -60,17 +57,19 @@ class Simulator:
                 occupancy: dict[str, int] = {}
                 for hub_name in current_state.values():
                     if hub_name not in (start_name, end_name):
-                        occupancy[hub_name] = occupancy.get(hub_name, 0) + 1
+                        occ = occupancy.get(hub_name, 0) + 1
+                        occupancy[hub_name] = occ
 
                 for hub_name, hub in self.graph.hubs.items():
                     if not hub.is_start and not hub.is_end:
                         occ = occupancy.get(hub_name, 0)
                         print(
-                            f"  > Zone {hub_name}: {occ}/{hub.max_drones} "
-                            f"drones"
+                            f"  > Zone {hub_name}: "
+                            f"{occ}/{hub.max_drones} drones"
                         )
 
         return self.history
 
     def run_single_path_pipeline(self) -> list[dict[str, str]]:
+        """Backward-compatibility wrapper for single path execution."""
         return self.run_simulation()

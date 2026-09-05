@@ -1,9 +1,13 @@
+"""Pathfinding module implementing SPFA and Min-Cost Max-Flow routing."""
+
 from __future__ import annotations
 from collections import deque
 from graph import Graph, FlowEdge, TimeNode, TimeExpandedGraph
 
 
 class Pathfinder:
+    """Finds multi-drone conflict-free routes on a time-expanded graph."""
+
     def __init__(self, graph: Graph) -> None:
         self.graph = graph
 
@@ -26,7 +30,10 @@ class Pathfinder:
                     neighbor = edge.v
                     candidate_cost = curr_dist + edge.cost
 
-                    if neighbor not in dist or candidate_cost < dist[neighbor]:
+                    if (
+                        neighbor not in dist
+                        or candidate_cost < dist[neighbor]
+                    ):
                         dist[neighbor] = candidate_cost
                         parent_edge[neighbor] = edge
 
@@ -41,10 +48,10 @@ class Pathfinder:
         path_edges: list[FlowEdge] = []
         curr_node = teg.sink
         while curr_node != teg.source:
-            edge = parent_edge[curr_node]
-            assert edge is not None
-            path_edges.append(edge)
-            curr_node = edge.u
+            p_edge = parent_edge[curr_node]
+            assert p_edge is not None
+            path_edges.append(p_edge)
+            curr_node = p_edge.u
 
         path_edges.reverse()
         return path_edges
@@ -71,7 +78,6 @@ class Pathfinder:
             if augmenting_path is None:
                 break
 
-            # Flow Augmentation: decrement capacity, refund into undo_link
             for edge in augmenting_path:
                 edge.capacity -= 1
                 if edge.undo_link is not None:
@@ -87,7 +93,7 @@ class Pathfinder:
     def _extract_drone_schedules(
         self, teg: TimeExpandedGraph
     ) -> dict[str, list[str]]:
-        """Decomposes the residual flow network into individual drone paths."""
+        """Decomposes residual flow network into individual drone paths."""
         assert self.graph.start_hub is not None
         assert self.graph.end_hub is not None
         start_name = self.graph.start_hub.name
@@ -100,7 +106,9 @@ class Pathfinder:
                     edge.initial_capacity > 0
                     and edge.capacity < edge.initial_capacity
                 ):
-                    flow_usage[edge] = edge.initial_capacity - edge.capacity
+                    flow_usage[edge] = (
+                        edge.initial_capacity - edge.capacity
+                    )
 
         drone_paths: dict[str, list[str]] = {}
 
@@ -115,7 +123,6 @@ class Pathfinder:
                 next_hub = curr_hub
                 advanced = False
 
-                # Prioritize movement transitions over wait edges
                 candidate_edges = teg.adj.get(out_node, [])
                 sorted_edges = sorted(
                     candidate_edges,
@@ -123,7 +130,10 @@ class Pathfinder:
                 )
 
                 for edge in sorted_edges:
-                    if flow_usage.get(edge, 0) > 0 and edge.v.turn == turn + 1:
+                    if (
+                        flow_usage.get(edge, 0) > 0
+                        and edge.v.turn == turn + 1
+                    ):
                         flow_usage[edge] -= 1
                         next_hub = edge.v.hub_name
                         advanced = True

@@ -1,3 +1,5 @@
+"""Entry point for the Fly-in drone routing simulation."""
+
 import sys
 import argparse
 import arcade
@@ -8,6 +10,7 @@ from visualization import FlyInVisualizer
 
 
 def main() -> None:
+    """Parses CLI arguments, calculates paths, and runs the simulation."""
     cli_parser = argparse.ArgumentParser(description="Fly-in Drone Routing")
     cli_parser.add_argument("map_file", type=str, help="Path to the map file")
     cli_parser.add_argument(
@@ -38,7 +41,11 @@ def main() -> None:
         simulation_history = sim.run_simulation()
 
         if args.visualize:
-            window = FlyInVisualizer(graph, simulation_data=simulation_history)
+            FlyInVisualizer(
+                graph,
+                simulation_data=simulation_history,
+                map_name=args.map_file,
+            )
             arcade.run()
 
     except ParsingError as e:
