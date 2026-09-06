@@ -1,8 +1,7 @@
-"""Pathfinding module implementing SPFA and Min-Cost Max-Flow routing."""
-
 from __future__ import annotations
+
 from collections import deque
-from graph import Graph, FlowEdge, TimeNode, TimeExpandedGraph
+from graph import FlowEdge, Graph, TimeExpandedGraph, TimeNode
 
 
 class Pathfinder:
@@ -11,9 +10,7 @@ class Pathfinder:
     def __init__(self, graph: Graph) -> None:
         self.graph = graph
 
-    def run_spfa(
-        self, teg: TimeExpandedGraph
-    ) -> list[FlowEdge] | None:
+    def run_spfa(self, teg: TimeExpandedGraph) -> list[FlowEdge] | None:
         """Finds augmenting path with negative weights via SPFA."""
         dist: dict[TimeNode, float] = {teg.source: 0.0}
         parent_edge: dict[TimeNode, FlowEdge | None] = {teg.source: None}
@@ -29,14 +26,12 @@ class Pathfinder:
                 if edge.capacity > 0:
                     neighbor = edge.v
                     candidate_cost = curr_dist + edge.cost
-
                     if (
                         neighbor not in dist
                         or candidate_cost < dist[neighbor]
                     ):
                         dist[neighbor] = candidate_cost
                         parent_edge[neighbor] = edge
-
                         if neighbor not in in_queue:
                             queue.append(neighbor)
                             in_queue.add(neighbor)
@@ -44,7 +39,6 @@ class Pathfinder:
         if teg.sink not in parent_edge:
             return None
 
-        # Reconstruct augmenting path from sink to source
         path_edges: list[FlowEdge] = []
         curr_node = teg.sink
         while curr_node != teg.source:
@@ -102,16 +96,10 @@ class Pathfinder:
         flow_usage: dict[FlowEdge, int] = {}
         for edges in teg.adj.values():
             for edge in edges:
-                if (
-                    edge.initial_capacity > 0
-                    and edge.capacity < edge.initial_capacity
-                ):
-                    flow_usage[edge] = (
-                        edge.initial_capacity - edge.capacity
-                    )
+                if edge.flow > 0:
+                    flow_usage[edge] = edge.flow
 
         drone_paths: dict[str, list[str]] = {}
-
         for i in range(self.graph.drone_count):
             drone_id = f"D{i + 1}"
             path: list[str] = [start_name]
@@ -122,13 +110,11 @@ class Pathfinder:
                 out_node = TimeNode(curr_hub, turn, True)
                 next_hub = curr_hub
                 advanced = False
-
                 candidate_edges = teg.adj.get(out_node, [])
                 sorted_edges = sorted(
                     candidate_edges,
                     key=lambda e: 1 if e.v.hub_name == curr_hub else 0,
                 )
-
                 for edge in sorted_edges:
                     if (
                         flow_usage.get(edge, 0) > 0

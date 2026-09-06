@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -38,20 +39,51 @@ class TimeNode:
     is_out_node: bool
 
 
+@dataclass
+class SharedCapacity:
+    """Shared capacity state across paired bidirectional connection edges."""
+
+    capacity: int
+    initial_capacity: int = 0
+
+    def __post_init__(self) -> None:
+        if self.initial_capacity == 0:
+            self.initial_capacity = self.capacity
+
+
 @dataclass(eq=False)
 class FlowEdge:
     """Residual edge tracking capacity, costs, and paired reverse links."""
 
     u: TimeNode
     v: TimeNode
-    capacity: int
+    _capacity: int
     cost: int
     initial_capacity: int = 0
     undo_link: FlowEdge | None = field(default=None, repr=False)
+    shared_cap: SharedCapacity | None = field(default=None, repr=False)
+    flow: int = 0
 
     def __post_init__(self) -> None:
-        if self.initial_capacity == 0 and self.capacity > 0:
-            self.initial_capacity = self.capacity
+        if self.initial_capacity == 0 and self._capacity > 0:
+            self.initial_capacity = self._capacity
+
+    @property
+    def capacity(self) -> int:
+        if self.shared_cap is not None:
+            return self.shared_cap.capacity
+        return self._capacity
+
+    @capacity.setter
+    def capacity(self, value: int) -> None:
+        if self.shared_cap is not None:
+            diff = self.shared_cap.capacity - value
+            self.shared_cap.capacity = value
+            self.flow += diff
+        else:
+            diff = self._capacity - value
+            self._capacity = value
+            self.flow += diff
 
     @property
     def residual_capacity(self) -> int:
@@ -64,18 +96,27 @@ def add_residual_edge_pair(
     v: TimeNode,
     capacity: int,
     cost: int,
+    shared_cap: SharedCapacity | None = None,
 ) -> tuple[FlowEdge, FlowEdge]:
     """Appends forward and reverse edges via paired object references."""
     forward_edge = FlowEdge(
-        u=u, v=v, capacity=capacity, cost=cost, initial_capacity=capacity
+        u=u,
+        v=v,
+        _capacity=capacity,
+        cost=cost,
+        initial_capacity=capacity,
+        shared_cap=shared_cap,
     )
     reverse_edge = FlowEdge(
-        u=v, v=u, capacity=0, cost=-cost, initial_capacity=0
+        u=v,
+        v=u,
+        _capacity=0,
+        cost=-cost,
+        initial_capacity=0,
+        shared_cap=None,
     )
-
     forward_edge.undo_link = reverse_edge
     reverse_edge.undo_link = forward_edge
-
     adj.setdefault(u, []).append(forward_edge)
     adj.setdefault(v, []).append(reverse_edge)
     return forward_edge, reverse_edge
@@ -128,14 +169,12 @@ class TimeExpandedGraph:
             )
 
         for t in range(start_turn, self.horizon + 1):
-            # 1. Zone Splitting: Internal bottleneck edges (IN -> OUT)
+            # 1. Zone Splitting: Internal capacity bottleneck (IN -> OUT)
             for hub in self.physical_graph.hubs.values():
                 if hub.zone == ZoneType.BLOCKED:
                     continue
-
                 in_node = TimeNode(hub.name, t, False)
                 out_node = TimeNode(hub.name, t, True)
-
                 cap = (
                     self.physical_graph.drone_count
                     if (hub.is_start or hub.is_end)
@@ -143,7 +182,6 @@ class TimeExpandedGraph:
                 )
                 add_residual_edge_pair(self.adj, in_node, out_node, cap, 0)
 
-                # Connect terminal hub directly to global sink
                 if hub.is_end:
                     turn_cost = t * 1000
                     add_residual_edge_pair(
@@ -154,13 +192,31 @@ class TimeExpandedGraph:
                         turn_cost,
                     )
 
-            # 2. Time transitions from turn (t - 1) to turn t
+        # 2. Transit Splitting: Intermediate nodes for restricted transitions
+            if t > 0:
+                for u_name, conns in self.physical_graph.adj.items():
+                    u_hub = self.physical_graph.hubs[u_name]
+                    if u_hub.zone == ZoneType.BLOCKED:
+                        continue
+                    for conn in conns:
+                        v_hub = self.physical_graph.hubs[conn.v]
+                        if v_hub.zone == ZoneType.RESTRICTED:
+                            t_in = TimeNode(f"{u_name}-{conn.v}", t, False)
+                            t_out = TimeNode(f"{u_name}-{conn.v}", t, True)
+                            add_residual_edge_pair(
+                                self.adj,
+                                t_in,
+                                t_out,
+                                conn.max_link_capacity,
+                                0,
+                            )
+
+            # 3. Time transitions from turn (t - 1) to turn t
             if t > 0:
                 # Wait edges across turns (t-1 -> t)
                 for hub in self.physical_graph.hubs.values():
                     if hub.zone == ZoneType.BLOCKED or hub.is_end:
                         continue
-
                     prev_out = TimeNode(hub.name, t - 1, True)
                     curr_in = TimeNode(hub.name, t, False)
                     wait_cap = (
@@ -173,27 +229,86 @@ class TimeExpandedGraph:
                         self.adj, prev_out, curr_in, wait_cap, wait_cost
                     )
 
-                # Connection links across turns (t-1 -> t)
-                for u_name, edges in self.physical_graph.adj.items():
+                # Complete 2-turn restricted transit: transit(t-1) -> dest(t)
+                for u_name, conns in self.physical_graph.adj.items():
                     u_hub = self.physical_graph.hubs[u_name]
-                    if u_hub.zone == ZoneType.BLOCKED or u_hub.is_end:
+                    if u_hub.zone == ZoneType.BLOCKED:
                         continue
+                    for conn in conns:
+                        v_hub = self.physical_graph.hubs[conn.v]
+                        if v_hub.zone == ZoneType.RESTRICTED:
+                            p_trans_out = TimeNode(
+                                f"{u_name}-{conn.v}", t - 1, True
+                            )
+                            c_dest_in = TimeNode(conn.v, t, False)
+                            add_residual_edge_pair(
+                                self.adj,
+                                p_trans_out,
+                                c_dest_in,
+                                conn.max_link_capacity,
+                                0,
+                            )
 
-                    prev_out = TimeNode(u_name, t - 1, True)
-
-                    for conn in edges:
+                # Connection entry links across turns (t-1 -> t)
+                seen_pairs: set[frozenset[str]] = set()
+                for u_name, conns in self.physical_graph.adj.items():
+                    u_hub = self.physical_graph.hubs[u_name]
+                    if u_hub.zone == ZoneType.BLOCKED:
+                        continue
+                    for conn in conns:
                         v_hub = self.physical_graph.hubs[conn.v]
                         if v_hub.zone == ZoneType.BLOCKED:
                             continue
 
-                        curr_in = TimeNode(conn.v, t, False)
-                        cost = self.get_zone_traversal_cost(v_hub.zone)
-                        add_residual_edge_pair(
-                            self.adj,
-                            prev_out,
-                            curr_in,
-                            conn.max_link_capacity,
-                            cost,
-                        )
+                        pair = frozenset({u_name, conn.v})
+                        if pair in seen_pairs:
+                            continue
+                        seen_pairs.add(pair)
+
+                        shared_cap = SharedCapacity(conn.max_link_capacity)
+
+                        # u -> v transition
+                        if not u_hub.is_end:
+                            prev_out_u = TimeNode(u_name, t - 1, True)
+                            if v_hub.zone == ZoneType.RESTRICTED:
+                                target_in = TimeNode(
+                                    f"{u_name}-{conn.v}", t, False
+                                )
+                                cost = self.get_zone_traversal_cost(
+                                    ZoneType.RESTRICTED
+                                )
+                            else:
+                                target_in = TimeNode(conn.v, t, False)
+                                cost = self.get_zone_traversal_cost(v_hub.zone)
+                            add_residual_edge_pair(
+                                self.adj,
+                                prev_out_u,
+                                target_in,
+                                conn.max_link_capacity,
+                                cost,
+                                shared_cap=shared_cap,
+                            )
+
+                        # v -> u transition
+                        if not v_hub.is_end:
+                            prev_out_v = TimeNode(conn.v, t - 1, True)
+                            if u_hub.zone == ZoneType.RESTRICTED:
+                                target_in = TimeNode(
+                                    f"{conn.v}-{u_name}", t, False
+                                )
+                                cost = self.get_zone_traversal_cost(
+                                    ZoneType.RESTRICTED
+                                )
+                            else:
+                                target_in = TimeNode(u_name, t, False)
+                                cost = self.get_zone_traversal_cost(u_hub.zone)
+                            add_residual_edge_pair(
+                                self.adj,
+                                prev_out_v,
+                                target_in,
+                                conn.max_link_capacity,
+                                cost,
+                                shared_cap=shared_cap,
+                            )
 
         self.built_turns = new_horizon

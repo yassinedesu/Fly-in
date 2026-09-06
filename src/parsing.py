@@ -45,7 +45,7 @@ class Parser:
     def pre_parse_line(self, line: str, line_n: int) -> None:
         """Performs sanity check on every non-blank line."""
         for ch in line:
-            if ch == "\t" or (ord(ch) < 32):
+            if ord(ch) < 32 and ch != "\t":
                 raise ParsingError(
                     line_n, f"Forbidden character {ch!r} in line: {line!r}"
                 )
@@ -387,12 +387,8 @@ if __name__ == "__main__":
     cli_parser.add_argument(
         "map_file", type=str, help="Path to the map file"
     )
-    cli_parser.add_argument(
-        "--capacity-info",
-        action="store_true",
-        help="Display capacity info per turn",
-    )
     args = cli_parser.parse_args()
+
     parser = Parser()
     graph = parser.parse_file(args.map_file)
     print(f"Loaded {graph.drone_count} drones.")
@@ -403,5 +399,3 @@ if __name__ == "__main__":
         f"Hubs: {len(graph.hubs)}, "
         f"Connections: {len(parser.seen_connections)}"
     )
-    if args.capacity_info:
-        print("Capacity flag enabled.")
