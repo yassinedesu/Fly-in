@@ -1,29 +1,15 @@
 """Interactive hardware-accelerated visualizer for Fly-in drone routing."""
-
 from __future__ import annotations
+
 import colorsys
 import math
+
 import arcade
 import arcade.types
+
 from graph import Graph, Hub, ZoneType
 
-WINDOW_WIDTH: int = 1024
-WINDOW_HEIGHT: int = 768
-WINDOW_TITLE: str = "Fly-in Drone Routing Visualizer"
-
-ZONE_RADIUS: float = 24.0
-DRONE_RADIUS: float = 8.0
-WORLD_SCALE: float = 140.0
-
-MIN_ZOOM: float = 0.05
-MAX_ZOOM: float = 8.0
-ZOOM_STEP: float = 1.12
-
-BACKGROUND_COLOR: arcade.types.Color = arcade.color.EERIE_BLACK
-LINE_COLOR: arcade.types.Color = arcade.color.DARK_GRAY
-TEXT_COLOR: arcade.types.Color = arcade.color.WHITE
-
-ZONE_TYPE_COLORS: dict[ZoneType, arcade.types.Color] = {
+ZONE_COLORS: dict[ZoneType, arcade.types.Color] = {
     ZoneType.NORMAL: arcade.color.LIGHT_GRAY,
     ZoneType.BLOCKED: arcade.color.DIM_GRAY,
     ZoneType.RESTRICTED: arcade.color.RED,
@@ -41,63 +27,34 @@ DRONE_COLORS: list[arcade.types.Color] = [
     arcade.color.WHITE,
 ]
 
-
-def get_rainbow_color(progress: float) -> arcade.types.Color:
-    """Generates a dynamic RGB cycling hue for rainbow metadata tags."""
-    r, g, b = colorsys.hsv_to_rgb((progress * 0.25) % 1.0, 0.85, 0.95)
-    return arcade.types.Color(
-        int(r * 255), int(g * 255), int(b * 255), 255
-    )
+COLOR_ALIASES: dict[str, arcade.types.Color] = {
+    "DARKRED": arcade.color.DARK_RED,
+    "LIME": arcade.color.LIME_GREEN,
+    "GREY": arcade.color.GRAY,
+}
 
 
 def resolve_hub_color(
-    hub: Hub, graph: Graph, anim_time: float = 0.0
+    hub: Hub, anim_time: float = 0.0
 ) -> arcade.types.Color:
-    """Determines the color of a hub prioritizing metadata over defaults."""
+    """Determines hub color prioritizing metadata tags over defaults."""
     if hub.color:
-        cleaned = hub.color.strip().upper()
-        if cleaned == "RAINBOW":
-            return get_rainbow_color(anim_time)
-
-        if hasattr(arcade.color, cleaned):
-            val = getattr(arcade.color, cleaned)
-            if isinstance(val, arcade.types.Color):
-                return val
-
-        normalized = cleaned.replace("-", "_").replace(" ", "_")
-        if hasattr(arcade.color, normalized):
-            val = getattr(arcade.color, normalized)
-            if isinstance(val, arcade.types.Color):
-                return val
-
-        aliases: dict[str, arcade.types.Color] = {
-            "DARKRED": arcade.color.DARK_RED,
-            "MAROON": arcade.color.MAROON,
-            "CRIMSON": arcade.color.CRIMSON,
-            "VIOLET": arcade.color.VIOLET,
-            "GOLD": arcade.color.GOLD,
-            "PURPLE": arcade.color.PURPLE,
-            "LIME": arcade.color.LIME_GREEN,
-            "CYAN": arcade.color.CYAN,
-            "ORANGE": arcade.color.ORANGE,
-            "GRAY": arcade.color.GRAY,
-            "GREY": arcade.color.GRAY,
-            "YELLOW": arcade.color.YELLOW,
-            "BLUE": arcade.color.BLUE,
-            "RED": arcade.color.RED,
-            "GREEN": arcade.color.GREEN,
-            "BLACK": arcade.color.BLACK,
-            "WHITE": arcade.color.WHITE,
-        }
-        if normalized in aliases:
-            return aliases[normalized]
-
+        name = hub.color.strip().upper().replace("-", "_").replace(" ", "_")
+        if name == "RAINBOW":
+            r, g, b = colorsys.hsv_to_rgb(
+                (anim_time * 0.25) % 1.0, 0.85, 0.95
+            )
+            return arcade.types.Color(
+                int(r * 255), int(g * 255), int(b * 255), 255
+            )
+        val = getattr(arcade.color, name, None) or COLOR_ALIASES.get(name)
+        if isinstance(val, arcade.types.Color):
+            return val
     if hub.is_start:
         return arcade.color.GREEN
     if hub.is_end:
         return arcade.color.GOLD
-
-    return ZONE_TYPE_COLORS.get(hub.zone, arcade.color.LIGHT_GRAY)
+    return ZONE_COLORS.get(hub.zone, arcade.color.LIGHT_GRAY)
 
 
 def point_line_distance(
@@ -105,21 +62,16 @@ def point_line_distance(
     a: tuple[float, float],
     b: tuple[float, float],
 ) -> float:
-    """Calculates point-to-segment distance via vector dot product."""
+    """Calculates point-to-segment distance via vector projection."""
     px, py = p
     ax, ay = a
     bx, by = b
-
     vx, vy = bx - ax, by - ay
-    length_sq = vx * vx + vy * vy
-    if length_sq == 0.0:
+    l2 = vx * vx + vy * vy
+    if l2 == 0.0:
         return math.hypot(px - ax, py - ay)
-
-    wx, wy = px - ax, py - ay
-    t = max(0.0, min(1.0, (wx * vx + wy * vy) / length_sq))
-    proj_x = ax + t * vx
-    proj_y = ay + t * vy
-    return math.hypot(px - proj_x, py - proj_y)
+    t = max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / l2))
+    return math.hypot(px - (ax + t * vx), py - (ay + t * vy))
 
 
 class FlyInVisualizer(arcade.Window):
@@ -132,96 +84,77 @@ class FlyInVisualizer(arcade.Window):
         map_name: str = "",
     ) -> None:
         title = (
-            f"{WINDOW_TITLE} - {map_name}" if map_name else WINDOW_TITLE
+            f"Fly-in Drone Routing - {map_name}"
+            if map_name
+            else "Fly-in Drone Routing"
         )
-        super().__init__(
-            WINDOW_WIDTH, WINDOW_HEIGHT, title, fullscreen=False
-        )
+        super().__init__(1024, 768, title, fullscreen=False)
         self.graph = graph
-        self.background_color = BACKGROUND_COLOR
-
         self.simulation_data = simulation_data or []
-        self.max_turns: int = max(0, len(self.simulation_data) - 1)
-        self.current_turn: float = 0.0
-        self.playing: bool = True
-        self.anim_speed: float = 2.0
-
-        self.mouse_x: float = 0.0
-        self.mouse_y: float = 0.0
+        self.background_color = arcade.color.EERIE_BLACK
+        self.max_turns = max(0, len(self.simulation_data) - 1)
+        self.current_turn = 0.0
+        self.playing = True
+        self.anim_speed = 2.0
+        self.mouse_x = 0.0
+        self.mouse_y = 0.0
+        self.default_zoom = 1.0
+        self.default_pos: tuple[float, float] = (0.0, 0.0)
 
         self.positions: dict[str, tuple[float, float]] = {
-            hub.name: (
-                float(hub.x * WORLD_SCALE),
-                float(hub.y * WORLD_SCALE),
-            )
-            for hub in self.graph.hubs.values()
+            h.name: (float(h.x * 140.0), float(h.y * 140.0))
+            for h in graph.hubs.values()
         }
-
         self.drone_colors: dict[str, arcade.types.Color] = {
             f"D{i + 1}": DRONE_COLORS[i % len(DRONE_COLORS)]
-            for i in range(self.graph.drone_count)
+            for i in range(graph.drone_count)
         }
 
-        end_name = self.graph.end_hub.name if self.graph.end_hub else ""
+        end = graph.end_hub.name if graph.end_hub else ""
         self.drone_paths: dict[str, list[tuple[float, float]]] = {
-            d_id: [] for d_id in self.drone_colors
+            d: [] for d in self.drone_colors
         }
-
-        for t in range(self.max_turns + 1):
-            state = (
-                self.simulation_data[t]
-                if t < len(self.simulation_data)
-                else {}
-            )
-            for d_id in self.drone_colors:
-                loc = state.get(d_id, end_name)
-                if "-" in loc:
-                    z1, z2 = loc.split("-")
-                    p1 = self.positions.get(z1, (0.0, 0.0))
-                    p2 = self.positions.get(z2, (0.0, 0.0))
-                    mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
-                    self.drone_paths[d_id].append(mid)
-                else:
-                    self.drone_paths[d_id].append(
-                        self.positions.get(loc, (0.0, 0.0))
-                    )
-
         self.occupancy_history: list[dict[str, int]] = []
+
         for t in range(self.max_turns + 1):
-            state = (
+            st = (
                 self.simulation_data[t]
                 if t < len(self.simulation_data)
                 else {}
             )
             occ: dict[str, int] = {}
-            for loc in state.values():
+            for d in self.drone_colors:
+                loc = st.get(d, end)
                 occ[loc] = occ.get(loc, 0) + 1
+                if "-" in loc:
+                    u, v = loc.split("-", 1)
+                    p1 = self.positions.get(u, (0.0, 0.0))
+                    p2 = self.positions.get(v, (0.0, 0.0))
+                    mid = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+                    self.drone_paths[d].append(mid)
+                else:
+                    self.drone_paths[d].append(
+                        self.positions.get(loc, (0.0, 0.0))
+                    )
             self.occupancy_history.append(occ)
 
         self.world_camera = arcade.Camera2D()
         self.gui_camera = arcade.Camera2D()
-
         self._fit_camera_view()
 
     def _fit_camera_view(self) -> None:
         """Centers and scales the camera to fit all network hubs."""
         if not self.positions:
             return
-
-        xs = [pos[0] for pos in self.positions.values()]
-        ys = [pos[1] for pos in self.positions.values()]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-
-        center_x = (min_x + max_x) / 2.0
-        center_y = (min_y + max_y) / 2.0
-        span_x = max(max_x - min_x + 220.0, 400.0)
-        span_y = max(max_y - min_y + 220.0, 300.0)
-
-        fit_zoom = min(WINDOW_WIDTH / span_x, WINDOW_HEIGHT / span_y)
-        self.default_zoom = max(MIN_ZOOM, min(1.2, fit_zoom))
-        self.default_pos = (center_x, center_y)
-
+        xs = [p[0] for p in self.positions.values()]
+        ys = [p[1] for p in self.positions.values()]
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        span_x = max(max(xs) - min(xs) + 220.0, 400.0)
+        span_y = max(max(ys) - min(ys) + 220.0, 300.0)
+        fit = min(1024.0 / span_x, 768.0 / span_y)
+        self.default_zoom = max(0.05, min(1.2, fit))
+        self.default_pos = (cx, cy)
         self.world_camera.zoom = self.default_zoom
         self.world_camera.position = self.default_pos
 
@@ -236,185 +169,140 @@ class FlyInVisualizer(arcade.Window):
                 self.playing = False
 
     def on_draw(self) -> None:
-        """Renders world entities, lerped drones, and the GUI overlay."""
+        """Renders world entities, lerped drones, and HUD."""
         self.clear()
-
-        # 1. World Camera
         self.world_camera.use()
-
-        world_mouse = self.world_camera.unproject(
-            (self.mouse_x, self.mouse_y)
-        )
-        wx, wy = world_mouse.x, world_mouse.y
-
-        hovered_edge: frozenset[str] | None = None
-        drawn_connections: set[frozenset[str]] = set()
+        wm = self.world_camera.unproject((self.mouse_x, self.mouse_y))
+        drawn: set[frozenset[str]] = set()
+        hov_edge: frozenset[str] | None = None
 
         for u, conns in self.graph.adj.items():
             p1 = self.positions[u]
-            for conn in conns:
-                pair = frozenset({u, conn.v})
-                if pair in drawn_connections:
+            for c in conns:
+                pair = frozenset({u, c.v})
+                if pair in drawn:
                     continue
-                drawn_connections.add(pair)
-
-                p2 = self.positions[conn.v]
-                dist = point_line_distance((wx, wy), p1, p2)
-                threshold = 12.0 / self.world_camera.zoom
-
-                if dist <= threshold and hovered_edge is None:
-                    hovered_edge = pair
+                drawn.add(pair)
+                p2 = self.positions[c.v]
+                dist = point_line_distance((wm.x, wm.y), p1, p2)
+                thresh = 12.0 / self.world_camera.zoom
+                if dist <= thresh and hov_edge is None:
+                    hov_edge = pair
                     arcade.draw_line(
                         p1[0], p1[1], p2[0], p2[1], arcade.color.YELLOW, 4
                     )
                 else:
                     arcade.draw_line(
-                        p1[0], p1[1], p2[0], p2[1], LINE_COLOR, 3
+                        p1[0], p1[1], p2[0], p2[1], arcade.color.DARK_GRAY, 3
                     )
 
-        # Draw Hubs
         for hub in self.graph.hubs.values():
             hx, hy = self.positions[hub.name]
-            hub_col = resolve_hub_color(hub, self.graph, self.current_turn)
-
-            arcade.draw_circle_filled(hx, hy, ZONE_RADIUS, hub_col)
-            arcade.draw_circle_outline(
-                hx, hy, ZONE_RADIUS, arcade.color.BLACK, 2
-            )
+            hub_col = resolve_hub_color(hub, self.current_turn)
+            arcade.draw_circle_filled(hx, hy, 24.0, hub_col)
+            arcade.draw_circle_outline(hx, hy, 24.0, arcade.color.BLACK, 2)
             arcade.Text(
                 hub.name,
                 hx,
-                hy + ZONE_RADIUS + 5,
-                TEXT_COLOR,
+                hy + 29,
+                arcade.color.WHITE,
                 11,
                 bold=True,
                 anchor_x="center",
             ).draw()
 
-        # Draw Drones with Linear Interpolation (Lerp)
         t0 = int(self.current_turn)
         t1 = min(t0 + 1, self.max_turns)
-        progress = (
-            self.current_turn % 1.0 if t0 < self.max_turns else 0.0
-        )
-
+        prog = self.current_turn % 1.0 if t0 < self.max_turns else 0.0
         for d_id, path in self.drone_paths.items():
-            if t0 >= len(path):
-                continue
-            p_start = path[t0]
-            p_target = path[t1] if t1 < len(path) else p_start
+            if t0 < len(path):
+                p0 = path[t0]
+                p1 = path[t1] if t1 < len(path) else p0
+                dx = p0[0] + (p1[0] - p0[0]) * prog
+                dy = p0[1] + (p1[1] - p0[1]) * prog
+                d_col = self.drone_colors.get(d_id, arcade.color.YELLOW)
+                arcade.draw_circle_filled(dx, dy, 8.0, d_col)
+                arcade.draw_circle_outline(
+                    dx, dy, 8.0, arcade.color.BLACK, 1.5
+                )
+                arcade.Text(
+                    d_id,
+                    dx,
+                    dy - 4,
+                    arcade.color.BLACK,
+                    8,
+                    bold=True,
+                    anchor_x="center",
+                ).draw()
 
-            drone_x = p_start[0] + (p_target[0] - p_start[0]) * progress
-            drone_y = p_start[1] + (p_target[1] - p_start[1]) * progress
-
-            col = self.drone_colors.get(d_id, arcade.color.YELLOW)
-            arcade.draw_circle_filled(drone_x, drone_y, DRONE_RADIUS, col)
-            arcade.draw_circle_outline(
-                drone_x, drone_y, DRONE_RADIUS, arcade.color.BLACK, 1.5
-            )
-            arcade.Text(
-                d_id,
-                drone_x,
-                drone_y - 4,
-                arcade.color.BLACK,
-                8,
-                bold=True,
-                anchor_x="center",
-            ).draw()
-
-        # 2. GUI Camera
         self.gui_camera.use()
-        self._draw_hud(t0)
-        self._draw_tooltip(wx, wy, t0)
-
-    def _draw_hud(self, current_whole_turn: int) -> None:
-        """Renders fixed HUD counters and keyboard control guide."""
-        end_name = self.graph.end_hub.name if self.graph.end_hub else ""
-        delivered = (
-            self.occupancy_history[current_whole_turn].get(end_name, 0)
-            if current_whole_turn < len(self.occupancy_history)
+        end = self.graph.end_hub.name if self.graph.end_hub else ""
+        deliv = (
+            self.occupancy_history[t0].get(end, 0)
+            if t0 < len(self.occupancy_history)
             else 0
         )
-
-        status_text = (
-            f"Turn: {int(self.current_turn)} / {self.max_turns}   "
-            f"Delivered: {delivered} / {self.graph.drone_count}"
+        hud = (
+            f"Turn: {t0} / {self.max_turns}   "
+            f"Delivered: {deliv} / {self.graph.drone_count}"
         )
-        arcade.Text(
-            status_text,
-            20,
-            WINDOW_HEIGHT - 35,
-            TEXT_COLOR,
-            14,
-            bold=True,
-        ).draw()
-
-        instructions = (
+        arcade.Text(hud, 20, 733, arcade.color.WHITE, 14, bold=True).draw()
+        help_txt = (
             "SPACE: Play/Pause | LEFT/RIGHT: Step | R: Restart | "
             "F: Reset View | Drag: Pan | Scroll: Zoom"
         )
-        arcade.Text(
-            instructions,
-            20,
-            18,
-            arcade.color.GRAY,
-            11,
-        ).draw()
+        arcade.Text(help_txt, 20, 18, arcade.color.GRAY, 11).draw()
+        self._draw_tooltip(wm.x, wm.y, t0)
 
     def _draw_tooltip(self, wx: float, wy: float, t0: int) -> None:
         """Displays formatted metadata tooltips when hovering nodes/edges."""
-        tooltip_lines: list[str] = []
-
-        # Check Hub hover
-        for hub in self.graph.hubs.values():
-            hx, hy = self.positions[hub.name]
-            if math.hypot(wx - hx, wy - hy) <= ZONE_RADIUS:
+        lines: list[str] = []
+        for h in self.graph.hubs.values():
+            hx, hy = self.positions[h.name]
+            if math.hypot(wx - hx, wy - hy) <= 24.0:
                 occ = (
-                    self.occupancy_history[t0].get(hub.name, 0)
+                    self.occupancy_history[t0].get(h.name, 0)
                     if t0 < len(self.occupancy_history)
                     else 0
                 )
-                limit = (
+                cap = (
                     self.graph.drone_count
-                    if (hub.is_start or hub.is_end)
-                    else hub.max_drones
+                    if (h.is_start or h.is_end)
+                    else h.max_drones
                 )
-                color_tag = f" | Color: {hub.color}" if hub.color else ""
-                tooltip_lines = [
-                    f"Zone: {hub.name}",
-                    f"Type: {hub.zone.value}{color_tag}",
-                    f"Occupied: {occ} / {limit}",
+                c_tag = f" | Color: {h.color}" if h.color else ""
+                lines = [
+                    f"Zone: {h.name}",
+                    f"Type: {h.zone.value}{c_tag}",
+                    f"Occupied: {occ} / {cap}",
                 ]
                 break
 
-        # Check Connection hover
-        if not tooltip_lines:
+        if not lines:
+            thresh = 12.0 / self.world_camera.zoom
             for u, conns in self.graph.adj.items():
                 p1 = self.positions[u]
-                for conn in conns:
-                    p2 = self.positions[conn.v]
-                    threshold = 12.0 / self.world_camera.zoom
-                    if point_line_distance((wx, wy), p1, p2) <= threshold:
-                        c1 = f"{u}-{conn.v}"
-                        c2 = f"{conn.v}-{u}"
+                for c in conns:
+                    p2 = self.positions[c.v]
+                    if point_line_distance((wx, wy), p1, p2) <= thresh:
                         occ = 0
                         if t0 < len(self.occupancy_history):
+                            hist = self.occupancy_history[t0]
                             occ = (
-                                self.occupancy_history[t0].get(c1, 0)
-                                + self.occupancy_history[t0].get(c2, 0)
+                                hist.get(f"{u}-{c.v}", 0)
+                                + hist.get(f"{c.v}-{u}", 0)
                             )
-                        tooltip_lines = [
-                            f"Link: {u} <-> {conn.v}",
-                            f"Occupied: {occ} / {conn.max_link_capacity}",
+                        lines = [
+                            f"Link: {u} <-> {c.v}",
+                            f"Occupied: {occ} / {c.max_link_capacity}",
                         ]
                         break
-                if tooltip_lines:
+                if lines:
                     break
 
-        if tooltip_lines:
-            content = "\n".join(tooltip_lines)
+        if lines:
             box = arcade.Text(
-                content,
+                "\n".join(lines),
                 self.mouse_x + 16,
                 self.mouse_y - 16,
                 arcade.color.WHITE,
@@ -424,34 +312,23 @@ class FlyInVisualizer(arcade.Window):
             )
             bw = box.content_width + 16
             bh = box.content_height + 16
-            cx = self.mouse_x + 16 + bw / 2.0 - 4
-            cy = self.mouse_y - 16 - bh / 2.0 + 12
-
+            cx = self.mouse_x + 8 + bw / 2.0
+            cy = self.mouse_y - 4 - bh / 2.0
+            poly = (
+                (cx - bw / 2.0, cy - bh / 2.0),
+                (cx + bw / 2.0, cy - bh / 2.0),
+                (cx + bw / 2.0, cy + bh / 2.0),
+                (cx - bw / 2.0, cy + bh / 2.0),
+            )
             arcade.draw_polygon_filled(
-                (
-                    (cx - bw / 2.0, cy - bh / 2.0),
-                    (cx + bw / 2.0, cy - bh / 2.0),
-                    (cx + bw / 2.0, cy + bh / 2.0),
-                    (cx - bw / 2.0, cy + bh / 2.0),
-                ),
-                (20, 24, 30, 230),
+                poly, arcade.types.Color(20, 24, 30, 230)
             )
-            arcade.draw_polygon_outline(
-                (
-                    (cx - bw / 2.0, cy - bh / 2.0),
-                    (cx + bw / 2.0, cy - bh / 2.0),
-                    (cx + bw / 2.0, cy + bh / 2.0),
-                    (cx - bw / 2.0, cy + bh / 2.0),
-                ),
-                arcade.color.DARK_GRAY,
-                1,
-            )
+            arcade.draw_polygon_outline(poly, arcade.color.DARK_GRAY, 1)
             box.draw()
 
     def on_mouse_motion(self, x: int, y: int, dx: int, dy: int) -> None:
         """Saves current screen cursor coordinates."""
-        self.mouse_x = float(x)
-        self.mouse_y = float(y)
+        self.mouse_x, self.mouse_y = float(x), float(y)
 
     def on_mouse_drag(
         self,
@@ -473,11 +350,8 @@ class FlyInVisualizer(arcade.Window):
     ) -> None:
         """Zooms centered on cursor using unprojected world coordinates."""
         if scroll_y != 0:
-            factor = ZOOM_STEP if scroll_y > 0 else 1.0 / ZOOM_STEP
-            new_zoom = max(
-                MIN_ZOOM, min(MAX_ZOOM, self.world_camera.zoom * factor)
-            )
-
+            factor = 1.12 if scroll_y > 0 else 1.0 / 1.12
+            new_zoom = max(0.05, min(8.0, self.world_camera.zoom * factor))
             if new_zoom != self.world_camera.zoom:
                 wb = self.world_camera.unproject((x, y))
                 self.world_camera.zoom = new_zoom
@@ -499,8 +373,7 @@ class FlyInVisualizer(arcade.Window):
         elif symbol == arcade.key.LEFT:
             self.current_turn = max(0.0, math.ceil(self.current_turn) - 1.0)
         elif symbol == arcade.key.R:
-            self.current_turn = 0.0
-            self.playing = True
+            self.current_turn, self.playing = 0.0, True
         elif symbol == arcade.key.F:
             self.world_camera.zoom = self.default_zoom
             self.world_camera.position = self.default_pos
